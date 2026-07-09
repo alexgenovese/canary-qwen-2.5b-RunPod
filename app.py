@@ -7,6 +7,13 @@ from typing import Optional, Tuple
 import tempfile
 import librosa
 import soundfile as sf
+import urllib.request
+import base64
+
+try:
+    import runpod
+except ImportError:
+    runpod = None
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -314,27 +321,119 @@ def create_gradio_interface():
     
     return demo
 
+def download_file(url):
+    """Download audio file from a URL to a temporary local file"""
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+    try:
+        logger.info(f"Retrieving {url} -> {temp_file.name}")
+        urllib.request.urlretrieve(url, temp_file.name)
+        return temp_file.name
+    except Exception as e:
+        logger.error(f"Failed to download file from {url}: {e}")
+        if os.path.exists(temp_file.name):
+            os.remove(temp_file.name)
+        raise e
+
+def decode_base64_audio(base64_str):
+    """Decode base64 string to a temporary local audio file"""
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+    try:
+        logger.info(f"Decoding base64 audio to {temp_file.name}")
+        audio_data = base64.b64decode(base64_str)
+        with open(temp_file.name, 'wb') as f:
+            f.write(audio_data)
+        return temp_file.name
+    except Exception as e:
+        logger.error(f"Failed to decode base64 audio: {e}")
+        if os.path.exists(temp_file.name):
+            os.remove(temp_file.name)
+        raise e
+
+def runpod_handler(job):
+    """
+    RunPod Serverless Queue Handler
+    """
+    try:
+        job_input = job.get("input", {})
+        
+        audio_url = job_input.get("audio_url")
+        audio_base64 = job_input.get("audio_base64")
+        prompt = job_input.get("prompt") or job_input.get("llm_prompt")
+        mode = job_input.get("mode", "transcribe").lower()
+        
+        if not audio_url and not audio_base64:
+            return {"error": "Either 'audio_url' or 'audio_base64' must be provided."}
+        
+        audio_path = None
+        try:
+            if audio_url:
+                audio_path = download_file(audio_url)
+            else:
+                audio_path = decode_base64_audio(audio_base64)
+                
+            logger.info("Transcribing audio...")
+            transcript = canary_interface.transcribe_audio(audio_path)
+            
+            if transcript.startswith("❌"):
+                return {"error": transcript}
+                
+            result = {"transcript": transcript}
+            
+            if mode == "analyze" or prompt:
+                if not prompt:
+                    return {"error": "Prompt must be provided for 'analyze' mode."}
+                logger.info(f"Running LLM inference with prompt: {prompt}")
+                analysis = canary_interface.llm_inference(transcript, prompt)
+                if analysis.startswith("❌"):
+                    return {"error": analysis, "transcript": transcript}
+                result["analysis"] = analysis
+                
+            return result
+            
+        finally:
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove temp audio file: {e}")
+                    
+    except Exception as e:
+        logger.error(f"Error in runpod_handler: {e}")
+        return {"error": str(e)}
+
 def main():
     """Main function to run the application"""
-    logger.info("Starting Canary-Qwen Gradio Interface...")
+    logger.info("Starting Canary-Qwen...")
     
     # Load model
     if not canary_interface.load_model():
-        logger.error("Failed to load model. The interface will still start but won't work properly.")
+        logger.error("Failed to load model. The application will still start but won't work properly.")
     
-    # Create and launch interface
-    demo = create_gradio_interface()
-    
-    logger.info(f"Launching interface on {GRADIO_SERVER_NAME}:{GRADIO_SERVER_PORT}")
-    logger.info(f"Share link: {GRADIO_SHARE}")
-    
-    demo.launch(
-        server_name=GRADIO_SERVER_NAME,
-        server_port=GRADIO_SERVER_PORT,
-        share=GRADIO_SHARE,
-        show_error=True,
-        show_api=False
+    # Check if we should run in RunPod Serverless mode or Gradio UI mode
+    is_runpod_env = runpod is not None and (
+        os.getenv("RUNPOD_ACTIVE") is not None or 
+        os.getenv("RUNPOD_IA_API_KEY") is not None or 
+        os.getenv("RUNPOD_SERVERLESS", "false").lower() == "true"
     )
+    
+    if is_runpod_env:
+        logger.info("Starting RunPod Serverless Endpoint...")
+        runpod.serverless.start({"handler": runpod_handler})
+    else:
+        logger.info("Starting Canary-Qwen Gradio Interface...")
+        # Create and launch interface
+        demo = create_gradio_interface()
+        
+        logger.info(f"Launching interface on {GRADIO_SERVER_NAME}:{GRADIO_SERVER_PORT}")
+        logger.info(f"Share link: {GRADIO_SHARE}")
+        
+        demo.launch(
+            server_name=GRADIO_SERVER_NAME,
+            server_port=GRADIO_SERVER_PORT,
+            share=GRADIO_SHARE,
+            show_error=True,
+            show_api=False
+        )
 
 if __name__ == "__main__":
     main()

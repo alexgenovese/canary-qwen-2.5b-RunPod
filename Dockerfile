@@ -22,8 +22,8 @@ RUN python3 -m pip install numpy typing_extensions
 # Install NeMo toolkit exactly as documented
 RUN python3 -m pip install "nemo_toolkit[asr,tts] @ git+https://github.com/NVIDIA/NeMo.git"
 
-# Install missing NeMo dependency and gradio
-RUN python3 -m pip install sacrebleu gradio
+# Install missing NeMo dependency, gradio and runpod SDK
+RUN python3 -m pip install sacrebleu gradio runpod
 
 # Set working directory
 WORKDIR /app
