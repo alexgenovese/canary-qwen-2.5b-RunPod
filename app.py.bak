@@ -260,7 +260,7 @@ def create_gradio_interface():
                             lines=6,
                             max_lines=10,
                             interactive=False,
-                            value=get_current_transcript()
+                            value=get_current_transcript
                         )
                         
                         refresh_transcript_btn = gr.Button("🔄 Refresh Transcript", size="sm")
@@ -344,7 +344,7 @@ def decode_base64_audio(base64_str):
             f.write(audio_data)
         return temp_file.name
     except Exception as e:
-        logger.error(f"Failed to decode base64 audio: {str(e)}")
+        logger.error(f"Failed to decode base64 audio: {e}")
         if os.path.exists(temp_file.name):
             os.remove(temp_file.name)
         raise e
@@ -380,6 +380,8 @@ def runpod_handler(job):
             result = {"transcript": transcript}
             
             if mode == "analyze" or prompt:
+                if not prompt:
+                    return {"error": "Prompt must be provided for 'analyze' mode."}
                 logger.info(f"Running LLM inference with prompt: {prompt}")
                 analysis = canary_interface.llm_inference(transcript, prompt)
                 if analysis.startswith("❌"):
